@@ -1,43 +1,78 @@
 import streamlit as st
-import easyocr
-import sqlite3
+import easyocr as ocr
+import mysql.connector
+from sqlalchemy import create_engine
+import pandas as pd
+import re
 
-# Create a file uploader widget
+st.title("Welcome to EasyOCR bussiness card extraction")
+mydb = mysql.connector.connect(
+    host="localhost",
+    user="root",
+    password="",
+    port="3306",
+)
+
+# Creating a cursor object
+mycursor = mydb.cursor()
+mycursor.execute('CREATE DATABASE IF NOT EXISTS OCRq')
+mycursor.execute('USE OCRq')
+mycursor.execute('CREATE TABLE IF NOT EXISTS business_cardsq (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255),designation VARCHAR(255), company_name VARCHAR(255), email VARCHAR(255),phone VARCHAR(255), website VARCHAR(255), address VARCHAR(255), others VARCHAR(255))')
+
+
+engine = create_engine("mysql+pymysql://{user}:{pw}@localhost/{db}"
+                       .format(user="root",
+                               pw="",
+                               db="OCRq"))
+
+
+name_pattern = re.compile(r"([A-Z][a-z'-]+(?:\s+[A-Z][a-z'-]+)*)")
+company_name_pattern = re.compile(r'\b\w+(?=\.com\b)')
+email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
+website_pattern = re.compile(r'(http[s]?:\/\/)?(www\.)?[^\s(["<,>]*\.com[^\s[",><]*')
+phone_pattern =re.compile(r'(\+?\d{1,3})?[-\.\s]?\d{3}[-\.\s]?\d{3,4}')
+l=[]
+name = ''
+designation=''
+company_name = ''
+email = ''
+phone=''
+website = ''
+address = ''
+others=''
+
 uploaded_file = st.file_uploader("Upload a business card image", type=["jpg", "jpeg", "png"])
-
-# Create a button to extract information from the uploaded image
 if st.button("Extract Information"):
-    # Check if an image has been uploaded
     if uploaded_file is not None:
-        # Read the image file using Streamlit
         image = uploaded_file.read()
-
-        # Use easyOCR to extract information from the image
-        reader = easyocr.Reader(['en'])
+        reader = ocr.Reader(['en'])
         results = reader.readtext(image)
-
-        # Display the extracted information in a table
         st.write("Extracted Information:")
-        table_data = [[result[0], result[1]] for result in results]
-        st.table(table_data)
 
-        # Save the extracted information and the uploaded image to a database
-        conn = sqlite3.connect('business_cards.db')
-        c = conn.cursor()
-        c.execute('CREATE TABLE IF NOT EXISTS business_cards (id INTEGER PRIMARY KEY, image BLOB, name TEXT, email TEXT, phone TEXT)')
-        name = ""
-        email = ""
-        phone = ""
-        for result in results:
-            if "name" in result[1].lower():
-                name = result[1].split("name")[-1].strip()
-            elif "email" in result[1].lower():
-                email = result[1].split("email")[-1].strip()
-            elif "phone" in result[1].lower():
-                phone = result[1].split("phone")[-1].strip()
-        c.execute("INSERT INTO business_cards (image, name, email, phone) VALUES (?, ?, ?, ?)", (sqlite3.Binary(image), name, email, phone))
-        conn.commit()
-        conn.close()
+        for r in results:
+            text = r[1]
+            l.append(r[1])
+            if email_pattern.search(text):
+                email = email_pattern.search(text).group()
+            elif website_pattern.search(text):
+                website = website_pattern.search(text).group()
+            elif re.search(r'^\d+[-\s]?\w*\s\w*\s\w*', text):
+                address = text
+            elif phone_pattern.search(text):
+                phone=text
+            else:
+                others = text
+        name=l[0]
+        designation=l[1]
+        match=re.search(company_name_pattern,website)
+        company_name = match.group()
+
+        insert_query = "INSERT INTO business_cardsq (name,designation, company_name, email,phone, website, address,others) VALUES (%s,%s, %s, %s,%s, %s, %s, %s)"
+        mycursor.execute(insert_query, (name, designation, company_name, email,phone, website, address, others))
+        mydb.commit()
+        disply={"Name":name,"Designation":designation,"company name ":company_name,"Email ":email,"phone":phone,"Website":website,"Address":address,"others":others}
+        df=pd.DataFrame([disply])
+        st.table(df)
 
     else:
-        st.write("Please upload an image before extracting information.")
+        st.warning("Please upload a business card image first!")
